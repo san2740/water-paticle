@@ -2,7 +2,6 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8" />
-
     <script src="https://cesium.com/downloads/cesiumjs/releases/1.131/Build/Cesium/Cesium.js"></script>
     <link href="https://cesium.com/downloads/cesiumjs/releases/1.131/Build/Cesium/Widgets/widgets.css" rel="stylesheet"/>
 
@@ -74,14 +73,15 @@
 <div id="cesiumContainer"></div>
 
 <div class="panel">
+
     <div class="row">
         <label>생성량: <span id="spawnRateText">25</span> particles/frame</label>
         <input id="spawnRateSlider" type="range" min="1" max="300" value="25" />
     </div>
 
     <div class="row">
-        <label>최대 입자 수: <span id="maxParticleText">5000</span></label>
-        <input id="maxParticleSlider" type="range" min="500" max="15000" step="500" value="5000" />
+        <label>최대 입자 수: <span id="maxParticleText">10000</span></label>
+        <input id="maxParticleSlider" type="range" min="500" max="20000" step="500" value="10000" />
     </div>
 
     <div class="row">
@@ -94,10 +94,6 @@
 </div>
 
 <script>
-    // ============================================================
-    // 1. Cesium ion 토큰
-    // ============================================================
-    // Cesium ion에서 발급받은 토큰으로 바꾸세요.
     Cesium.Ion.defaultAccessToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI0NDVmZDE1OC1hYzlhLTQzYTMtOTgzNi1kOWQxN2Q2OTc3N2QiLCJpZCI6MjE2OTMyLCJpYXQiOjE3NjY0ODM1ODd9.mRp72jy1bvm4Zxie2rZv2wNHhQUBpaDup1dC2eQFd-0";
 
     const statusEl = document.getElementById("status");
@@ -108,10 +104,6 @@
     const speedSlider = document.getElementById("speedSlider");
     const speedText = document.getElementById("speedText");
 
-    // ============================================================
-    // 2. 위치 설정
-    // ============================================================
-    // 초기 위치: 가산디지털단지역 인근. 클릭하면 이 중심 좌표 자체가 새 위치로 바뀝니다.
     let centerLon = 126.8827;
     let centerLat = 37.4816;
 
@@ -136,9 +128,6 @@
         };
     }
 
-    // ============================================================
-    // 3. 시뮬레이션 영역
-    // ============================================================
     const AREA = {
         left: -1200,
         right: 1200,
@@ -161,9 +150,6 @@
     let isRebuildingTerrain = false;
     let hasSimulationStarted = false;
 
-    // ============================================================
-    // 4. 물 시뮬레이션 파라미터
-    // ============================================================
     let MAX_PARTICLES = 5000;
     let SPAWN_RATE = 25;
     let SIMULATION_SPEED = 1.0;
@@ -177,7 +163,7 @@
     let sourceY = 520;
 
     const SOURCE_RADIUS = 45;
-    const PARTICLE_PIXEL_SIZE = 10;
+    const PARTICLE_PIXEL_SIZE = 3;
 
     const SLOPE_ACCELERATION = 42;
     const RANDOM_SPREAD = 0.035;
@@ -187,13 +173,9 @@
     const LIFE_MIN = 600;
     const LIFE_RANDOM = 700;
 
-    // 입자끼리 너무 뭉치지 않게 하는 간단한 공간 해시
     const HASH_CELL_SIZE = 35;
     const spatialHash = new Map();
 
-    // ============================================================
-    // 5. Cesium 초기화
-    // ============================================================
     async function initCesium() {
 
         terrainProvider = await Cesium.CesiumTerrainProvider.fromIonAssetId(1, {
@@ -224,16 +206,11 @@
 
         setCameraA();
 
-        // 처음에는 시뮬레이션을 실행하지 않습니다.
-        // 사용자가 지도 위를 클릭하면 그 위치를 중심으로 지형 샘플링, 영역 표시, 입자 풀이 생성됩니다.
         setupMouseSourceMove();
         startSimulation();
 
     }
 
-    // ============================================================
-    // 6. 지형 고도 격자 만들기
-    // ============================================================
     async function buildTerrainGrid() {
         isRebuildingTerrain = true;
 
@@ -350,9 +327,6 @@
         );
     }
 
-    // ============================================================
-    // 7. 시각 요소
-    // ============================================================
     function localPolygonToDegrees(points) {
         const arr = [];
 
@@ -388,14 +362,6 @@
         });
     }
 
-    function drawSourceMarker() {
-        // 요청에 따라 물 생성 원기둥/라벨은 표시하지 않습니다.
-        // 실제 수원지는 sourceX/sourceY 좌표와 생성되는 물 입자로만 표현됩니다.
-    }
-
-    // ============================================================
-    // 8. 입자 클래스
-    // ============================================================
     class WaterParticle {
         constructor(point) {
             this.point = point;
@@ -492,9 +458,6 @@
         }
     }
 
-    // ============================================================
-    // 9. 입자 풀 생성
-    // ============================================================
     function createParticlePool(count) {
         particles.length = 0;
         activeCount = 0;
@@ -531,9 +494,6 @@
         }
     }
 
-    // ============================================================
-    // 10. 공간 해시 기반 간단한 물 퍼짐
-    // ============================================================
     function hashKey(cx, cy) {
         return cx + "," + cy;
     }
@@ -599,9 +559,6 @@
         }
     }
 
-    // ============================================================
-    // 11. 시뮬레이션 루프
-    // ============================================================
     function startSimulation() {
         viewer.clock.onTick.addEventListener(function () {
             if (!hasSimulationStarted || isRebuildingTerrain || !terrainGrid.length || particles.length === 0) {
@@ -638,9 +595,6 @@
         releaseWater = !releaseWater;
     }
 
-    // ============================================================
-    // 12. 수원지 이동
-    // ============================================================
     async function recenterSimulationAt(lon, lat, resetParticles = true) {
         if (isRebuildingTerrain) return false;
 
@@ -648,7 +602,6 @@
         centerLat = lat;
         updateLocalProjection();
 
-        // 새 중심을 클릭 지점으로 잡기 때문에 수원지는 항상 새 영역의 중앙입니다.
         sourceX = 0;
         sourceY = 0;
 
@@ -695,9 +648,6 @@
         return viewer.scene.globe.pick(ray, viewer.scene);
     }
 
-    // ============================================================
-    // 13. 카메라
-    // ============================================================
     let cameraMode = 0;
 
     function setCameraA() {
@@ -733,9 +683,6 @@
     }
 
 
-    // ============================================================
-    // 14. UI
-    // ============================================================
     spawnRateSlider.addEventListener("input", function () {
         SPAWN_RATE = Number(spawnRateSlider.value);
         spawnRateText.textContent = SPAWN_RATE;
@@ -767,9 +714,6 @@
 
     });
 
-    // ============================================================
-    // 15. 시작
-    // ============================================================
     initCesium().catch(function (error) {
         console.error(error);
     });
