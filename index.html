@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8" />
+    <title>Cesium 지형 기반 대량 물 입자 시뮬레이션</title>
+
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.131/Build/Cesium/Cesium.js"></script>
+    <link href="https://cesium.com/downloads/cesiumjs/releases/1.131/Build/Cesium/Widgets/widgets.css" rel="stylesheet"/>
+
+    <style>
+        html, body, #cesiumContainer {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #000;
+            font-family: Arial, sans-serif;
+        }
+
+        .panel {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            z-index: 10;
+            width: 350px;
+            padding: 14px;
+            border-radius: 12px;
+            background: rgba(0, 0, 0, 0.74);
+            color: white;
+            font-size: 14px;
+            line-height: 1.55;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+        }
+
+        .panel h2 {
+            margin: 0 0 8px 0;
+            font-size: 17px;
+        }
+
+        button {
+            width: 100%;
+            padding: 9px 10px;
+            margin-top: 8px;
+            border: 0;
+            border-radius: 8px;
+            background: #2f80ed;
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #1f67c7;
+        }
+
+        input[type="range"] {
+            width: 100%;
+        }
+
+        .row {
+            margin-top: 8px;
+        }
+
+        .status {
+            margin-top: 8px;
+            font-size: 12px;
+            opacity: 0.86;
+            white-space: pre-line;
+        }
+    </style>
+</head>
+
+<body>
+<div id="cesiumContainer"></div>
+
+<div class="panel">
+    <h2>Cesium 대량 물 입자 시뮬레이션</h2>
+
+    <div>지형 고도를 따라 낮은 방향으로 물이 흐릅니다.</div>
+    <div>지도 위를 클릭하면 해당 위치를 중심으로 새 영역을 만들고 물 시뮬레이션을 시작합니다.</div>
+
+    <div class="row">
+        <label>생성량: <span id="spawnRateText">25</span> particles/frame</label>
+        <input id="spawnRateSlider" type="range" min="1" max="300" value="25" />
+    </div>
+
+    <div class="row">
+        <label>최대 입자 수: <span id="maxParticleText">5000</span></label>
+        <input id="maxParticleSlider" type="range" min="500" max="15000" step="500" value="5000" />
+    </div>
+
+    <div class="row">
+        <label>시뮬레이션 속도: <span id="speedText">0.3</span>x</label>
+        <input id="speedSlider" type="range" min="0.1" max="1" step="0.1" value="0.3" />
+    </div>
+
+    <button onclick="toggleRelease()">물 생성 ON / OFF</button>
+    <button onclick="resetWater()">물 리셋</button>
+</div>
+
+<script>
+    // ============================================================
+    // 1. Cesium ion 토큰
+    // ============================================================
+    // Cesium ion에서 발급받은 토큰으로 바꾸세요.
+    Cesium.Ion.defaultAccessToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI0NDVmZDE1OC1hYzlhLTQzYTMtOTgzNi1kOWQxN2Q2OTc3N2QiLCJpZCI6MjE2OTMyLCJpYXQiOjE3NjY0ODM1ODd9.mRp72jy1bvm4Zxie2rZv2wNHhQUBpaDup1dC2eQFd-0";
+
+    const statusEl = document.getElementById("status");
+    const spawnRateSlider = document.getElementById("spawnRateSlider");
+    const spawnRateText = document.getElementById("spawnRateText");
+    const maxParticleSlider = document.getElementById("maxParticleSlider");
+    const maxParticleText = document.getElementById("maxParticleText");
+    const speedSlider = document.getElementById("speedSlider");
+    const speedText = document.getElementById("speedText");
+
+    // ============================================================
+    // 2. 위치 설정
+    // ============================================================
+    // 초기 위치: 가산디지털단지역 인근. 클릭하면 이 중심 좌표 자체가 새 위치로 바뀝니다.
+    let centerLon = 126.8827;
+    let centerLat = 37.4816;
+
+    const metersPerDegreeLat = 111320;
+    let metersPerDegreeLon = 111320 * Math.cos(Cesium.Math.toRadians(centerLat));
+
+    function updateLocalProjection() {
+        metersPerDegreeLon = 111320 * Math.cos(Cesium.Math.toRadians(centerLat));
+    }
+
+    function localToLonLat(x, y) {
+        return {
+            lon: centerLon + x / metersPerDegreeLon,
+            lat: centerLat + y / metersPerDegreeLat
+        };
+    }
+
+    function lonLatToLocal(lon, lat) {
+        return {
+            x: (lon - centerLon) * metersPerDegreeLon,
+            y: (lat - centerLat) * metersPerDegreeLat
+        };
+    }
+
+    // ============================================================
+    // 3. 시뮬레이션 영역
+    // ============================================================
+    const AREA = {
+        left: -1200,
+        right: 1200,
+        bottom: -1200,
+        top: 1200
+    };
+
+    const GRID_SIZE = 45;
+    const GRID_COLS = Math.floor((AREA.right - AREA.left) / GRID_SIZE) + 1;
+    const GRID_ROWS = Math.floor((AREA.top - AREA.bottom) / GRID_SIZE) + 1;
+
+    const terrainGrid = [];
+    let minTerrainHeight = Infinity;
+    let maxTerrainHeight = -Infinity;
+
+    let viewer;
+    let terrainProvider;
+    let waterCollection;
+    let simulationAreaEntity = null;
+    let isRebuildingTerrain = false;
+    let hasSimulationStarted = false;
+
+    // ============================================================
+    // 4. 물 시뮬레이션 파라미터
+    // ============================================================
+    let MAX_PARTICLES = 5000;
+    let SPAWN_RATE = 25;
+    let SIMULATION_SPEED = 1.0;
+
+    const particles = [];
+    let activeCount = 0;
+
+    let releaseWater = false;
+
+    let sourceX = -520;
+    let sourceY = 520;
+
+    const SOURCE_RADIUS = 45;
+    const PARTICLE_PIXEL_SIZE = 10;
+
+    const SLOPE_ACCELERATION = 42;
+    const RANDOM_SPREAD = 0.035;
+    const DAMPING = 0.975;
+    const MAX_SPEED = 15;
+
+    const LIFE_MIN = 600;
+    const LIFE_RANDOM = 700;
+
+    // 입자끼리 너무 뭉치지 않게 하는 간단한 공간 해시
+    const HASH_CELL_SIZE = 35;
+    const spatialHash = new Map();
+
+    // ============================================================
+    // 5. Cesium 초기화
+    // ============================================================
+    async function initCesium() {
+
+        terrainProvider = await Cesium.CesiumTerrainProvider.fromIonAssetId(1, {
+            requestVertexNormals: true,
+            requestWaterMask: true
+        });
+
+        viewer = new Cesium.Viewer("cesiumContainer", {
+            terrainProvider: terrainProvider,
+            animation: false,
+            timeline: false,
+            baseLayerPicker: true,
+            geocoder: true,
+            homeButton: true,
+            sceneModePicker: true,
+            navigationHelpButton: false,
+            infoBox: false,
+            selectionIndicator: false
+        });
+
+        viewer.scene.globe.enableLighting = true;
+        viewer.scene.globe.depthTestAgainstTerrain = false;
+        viewer.scene.requestRenderMode = false;
+
+        waterCollection = viewer.scene.primitives.add(
+            new Cesium.PointPrimitiveCollection()
+        );
+
+        setCameraA();
+
+        // 처음에는 시뮬레이션을 실행하지 않습니다.
+        // 사용자가 지도 위를 클릭하면 그 위치를 중심으로 지형 샘플링, 영역 표시, 입자 풀이 생성됩니다.
+        setupMouseSourceMove();
+        startSimulation();
+
+    }
+
+    // ============================================================
+    // 6. 지형 고도 격자 만들기
+    // ============================================================
+    async function buildTerrainGrid() {
+        isRebuildingTerrain = true;
+
+        terrainGrid.length = 0;
+        minTerrainHeight = Infinity;
+        maxTerrainHeight = -Infinity;
+
+        const positions = [];
+
+        for (let row = 0; row < GRID_ROWS; row++) {
+            terrainGrid[row] = [];
+
+            for (let col = 0; col < GRID_COLS; col++) {
+                const x = AREA.left + col * GRID_SIZE;
+                const y = AREA.bottom + row * GRID_SIZE;
+                const ll = localToLonLat(x, y);
+
+                positions.push(Cesium.Cartographic.fromDegrees(ll.lon, ll.lat));
+            }
+        }
+
+        try {
+            const updated = await Cesium.sampleTerrainMostDetailed(
+                terrainProvider,
+                positions
+            );
+
+            let index = 0;
+
+            for (let row = 0; row < GRID_ROWS; row++) {
+                for (let col = 0; col < GRID_COLS; col++) {
+                    const h = updated[index].height || 0;
+
+                    terrainGrid[row][col] = h;
+
+                    minTerrainHeight = Math.min(minTerrainHeight, h);
+                    maxTerrainHeight = Math.max(maxTerrainHeight, h);
+
+                    index++;
+                }
+            }
+        } finally {
+            isRebuildingTerrain = false;
+        }
+    }
+
+    function getTerrainHeightLocal(x, y) {
+        const colFloat = (x - AREA.left) / GRID_SIZE;
+        const rowFloat = (y - AREA.bottom) / GRID_SIZE;
+
+        const col0 = Math.floor(colFloat);
+        const row0 = Math.floor(rowFloat);
+        const col1 = col0 + 1;
+        const row1 = row0 + 1;
+
+        if (
+            row0 < 0 || col0 < 0 ||
+            row1 >= GRID_ROWS || col1 >= GRID_COLS
+        ) {
+            return minTerrainHeight;
+        }
+
+        const tx = colFloat - col0;
+        const ty = rowFloat - row0;
+
+        const h00 = terrainGrid[row0][col0];
+        const h10 = terrainGrid[row0][col1];
+        const h01 = terrainGrid[row1][col0];
+        const h11 = terrainGrid[row1][col1];
+
+        const h0 = h00 * (1 - tx) + h10 * tx;
+        const h1 = h01 * (1 - tx) + h11 * tx;
+
+        return h0 * (1 - ty) + h1 * ty;
+    }
+
+    function getSlopeDirection(x, y) {
+        const step = GRID_SIZE;
+
+        const hEast = getTerrainHeightLocal(x + step, y);
+        const hWest = getTerrainHeightLocal(x - step, y);
+        const hNorth = getTerrainHeightLocal(x, y + step);
+        const hSouth = getTerrainHeightLocal(x, y - step);
+
+        // 동서남북 높이 차이로 낮은 방향 계산
+        const slopeX = (hWest - hEast) / (step * 2);
+        const slopeY = (hSouth - hNorth) / (step * 2);
+
+        const len = Math.sqrt(slopeX * slopeX + slopeY * slopeY);
+
+        if (len < 0.000001) {
+            return {
+                x: 0,
+                y: 0,
+                steepness: 0
+            };
+        }
+
+        return {
+            x: slopeX / len,
+            y: slopeY / len,
+            steepness: len
+        };
+    }
+
+    function localToCartesianOnTerrain(x, y, offsetHeight = 2) {
+        const ll = localToLonLat(x, y);
+        const terrainHeight = terrainGrid.length ? getTerrainHeightLocal(x, y) : 0;
+
+        return Cesium.Cartesian3.fromDegrees(
+            ll.lon,
+            ll.lat,
+            terrainHeight + offsetHeight
+        );
+    }
+
+    // ============================================================
+    // 7. 시각 요소
+    // ============================================================
+    function localPolygonToDegrees(points) {
+        const arr = [];
+
+        for (const p of points) {
+            const ll = localToLonLat(p.x, p.y);
+            arr.push(ll.lon, ll.lat);
+        }
+
+        return arr;
+    }
+
+    function drawSimulationArea() {
+        if (simulationAreaEntity) {
+            viewer.entities.remove(simulationAreaEntity);
+        }
+
+        simulationAreaEntity = viewer.entities.add({
+            name: "Simulation Area",
+            polygon: {
+                hierarchy: Cesium.Cartesian3.fromDegreesArray(
+                    localPolygonToDegrees([
+                        { x: AREA.left, y: AREA.bottom },
+                        { x: AREA.right, y: AREA.bottom },
+                        { x: AREA.right, y: AREA.top },
+                        { x: AREA.left, y: AREA.top }
+                    ])
+                ),
+                material: Cesium.Color.CYAN.withAlpha(0.05),
+                outline: true,
+                outlineColor: Cesium.Color.CYAN.withAlpha(0.55),
+                classificationType: Cesium.ClassificationType.TERRAIN
+            }
+        });
+    }
+
+    function drawSourceMarker() {
+        // 요청에 따라 물 생성 원기둥/라벨은 표시하지 않습니다.
+        // 실제 수원지는 sourceX/sourceY 좌표와 생성되는 물 입자로만 표현됩니다.
+    }
+
+    // ============================================================
+    // 8. 입자 클래스
+    // ============================================================
+    class WaterParticle {
+        constructor(point) {
+            this.point = point;
+            this.active = false;
+
+            this.x = 0;
+            this.y = 0;
+            this.vx = 0;
+            this.vy = 0;
+            this.age = 0;
+            this.maxAge = LIFE_MIN + Math.random() * LIFE_RANDOM;
+            this.offsetHeight = 2 + Math.random() * 1.5;
+        }
+
+        spawnAtSource() {
+            const angle = Math.random() * Math.PI * 2;
+            const radius = Math.sqrt(Math.random()) * SOURCE_RADIUS;
+
+            this.x = sourceX + Math.cos(angle) * radius;
+            this.y = sourceY + Math.sin(angle) * radius;
+
+            this.vx = (Math.random() - 0.5) * 1.2;
+            this.vy = (Math.random() - 0.5) * 1.2;
+
+            this.age = 0;
+            this.maxAge = LIFE_MIN + Math.random() * LIFE_RANDOM;
+            this.offsetHeight = 1.8 + Math.random() * 1.8;
+            this.active = true;
+
+            this.point.show = true;
+        }
+
+        kill() {
+            this.active = false;
+            this.point.show = false;
+        }
+
+        update(deltaTime = 1) {
+            if (!this.active) return;
+
+            this.age += deltaTime;
+
+            const slope = getSlopeDirection(this.x, this.y);
+
+            const slopeForce = Math.min(
+                0.9,
+                slope.steepness * SLOPE_ACCELERATION
+            );
+
+            this.vx += slope.x * slopeForce * deltaTime;
+            this.vy += slope.y * slopeForce * deltaTime;
+
+            // 자연스러운 퍼짐
+            this.vx += (Math.random() - 0.5) * RANDOM_SPREAD * Math.sqrt(deltaTime);
+            this.vy += (Math.random() - 0.5) * RANDOM_SPREAD * Math.sqrt(deltaTime);
+
+            const dampingFactor = Math.pow(DAMPING, deltaTime);
+            this.vx *= dampingFactor;
+            this.vy *= dampingFactor;
+
+            const speed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+
+            if (speed > MAX_SPEED) {
+                this.vx = (this.vx / speed) * MAX_SPEED;
+                this.vy = (this.vy / speed) * MAX_SPEED;
+            }
+
+            this.x += this.vx * deltaTime;
+            this.y += this.vy * deltaTime;
+
+            if (
+                this.x < AREA.left ||
+                this.x > AREA.right ||
+                this.y < AREA.bottom ||
+                this.y > AREA.top ||
+                this.age > this.maxAge
+            ) {
+                this.kill();
+                return;
+            }
+
+            this.updatePoint(speed);
+        }
+
+        updatePoint(speed) {
+            this.point.position = localToCartesianOnTerrain(
+                this.x,
+                this.y,
+                this.offsetHeight
+            );
+
+            const alpha = Math.min(230, 90 + speed * 12);
+            this.point.color = Cesium.Color.fromBytes(35, 165, 255, alpha);
+        }
+    }
+
+    // ============================================================
+    // 9. 입자 풀 생성
+    // ============================================================
+    function createParticlePool(count) {
+        particles.length = 0;
+        activeCount = 0;
+        waterCollection.removeAll();
+
+        for (let i = 0; i < count; i++) {
+            const point = waterCollection.add({
+                position: localToCartesianOnTerrain(sourceX, sourceY, 2),
+                pixelSize: PARTICLE_PIXEL_SIZE,
+                color: Cesium.Color.fromBytes(35, 165, 255, 0),
+                outlineColor: Cesium.Color.WHITE.withAlpha(0.16),
+                outlineWidth: 0.6,
+                scaleByDistance: new Cesium.NearFarScalar(300, 1.35, 3500, 0.18),
+                disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                show: false
+            });
+
+            particles.push(new WaterParticle(point));
+        }
+    }
+
+    function spawnParticles() {
+        if (!releaseWater) return;
+
+        let spawned = 0;
+
+        for (let i = 0; i < particles.length && spawned < SPAWN_RATE; i++) {
+            const p = particles[i];
+
+            if (!p.active) {
+                p.spawnAtSource();
+                spawned++;
+            }
+        }
+    }
+
+    // ============================================================
+    // 10. 공간 해시 기반 간단한 물 퍼짐
+    // ============================================================
+    function hashKey(cx, cy) {
+        return cx + "," + cy;
+    }
+
+    function buildSpatialHash() {
+        spatialHash.clear();
+
+        for (let i = 0; i < particles.length; i++) {
+            const p = particles[i];
+            if (!p.active) continue;
+
+            const cx = Math.floor(p.x / HASH_CELL_SIZE);
+            const cy = Math.floor(p.y / HASH_CELL_SIZE);
+            const key = hashKey(cx, cy);
+
+            if (!spatialHash.has(key)) {
+                spatialHash.set(key, []);
+            }
+
+            spatialHash.get(key).push(p);
+        }
+    }
+
+    function applyLocalPressure() {
+        const radius = 24;
+        const radiusSq = radius * radius;
+        const pressure = 0.018;
+
+        buildSpatialHash();
+
+        for (const p of particles) {
+            if (!p.active) continue;
+
+            const cx = Math.floor(p.x / HASH_CELL_SIZE);
+            const cy = Math.floor(p.y / HASH_CELL_SIZE);
+
+            for (let ox = -1; ox <= 1; ox++) {
+                for (let oy = -1; oy <= 1; oy++) {
+                    const list = spatialHash.get(hashKey(cx + ox, cy + oy));
+                    if (!list) continue;
+
+                    for (const other of list) {
+                        if (other === p || !other.active) continue;
+
+                        const dx = other.x - p.x;
+                        const dy = other.y - p.y;
+                        const d2 = dx * dx + dy * dy;
+
+                        if (d2 > 0 && d2 < radiusSq) {
+                            const d = Math.sqrt(d2);
+                            const overlap = radius - d;
+
+                            const nx = dx / d;
+                            const ny = dy / d;
+                            const f = overlap * pressure;
+
+                            p.vx -= nx * f;
+                            p.vy -= ny * f;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ============================================================
+    // 11. 시뮬레이션 루프
+    // ============================================================
+    function startSimulation() {
+        viewer.clock.onTick.addEventListener(function () {
+            if (!hasSimulationStarted || isRebuildingTerrain || !terrainGrid.length || particles.length === 0) {
+                return;
+            }
+
+            spawnParticles();
+            applyLocalPressure();
+
+            activeCount = 0;
+
+            for (const p of particles) {
+                if (p.active) {
+                    p.update(SIMULATION_SPEED);
+
+                    if (p.active) {
+                        activeCount++;
+                    }
+                }
+            }
+
+        });
+    }
+
+    function resetWater() {
+        for (const p of particles) {
+            p.kill();
+        }
+
+        activeCount = 0;
+    }
+
+    function toggleRelease() {
+        releaseWater = !releaseWater;
+    }
+
+    // ============================================================
+    // 12. 수원지 이동
+    // ============================================================
+    async function recenterSimulationAt(lon, lat, resetParticles = true) {
+        if (isRebuildingTerrain) return false;
+
+        centerLon = lon;
+        centerLat = lat;
+        updateLocalProjection();
+
+        // 새 중심을 클릭 지점으로 잡기 때문에 수원지는 항상 새 영역의 중앙입니다.
+        sourceX = 0;
+        sourceY = 0;
+
+        hasSimulationStarted = false;
+        releaseWater = false;
+
+        if (resetParticles) {
+            resetWater();
+        }
+
+        await buildTerrainGrid();
+
+        drawSimulationArea();
+        createParticlePool(MAX_PARTICLES);
+
+        hasSimulationStarted = true;
+        releaseWater = true;
+        return true;
+    }
+
+    async function setSourceFromCartesian(cartesian, resetParticles = true) {
+        if (!cartesian) return false;
+
+        const carto = Cesium.Cartographic.fromCartesian(cartesian);
+        const lon = Cesium.Math.toDegrees(carto.longitude);
+        const lat = Cesium.Math.toDegrees(carto.latitude);
+
+        return recenterSimulationAt(lon, lat, resetParticles);
+    }
+
+    function setupMouseSourceMove() {
+        const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+
+        handler.setInputAction(async function (movement) {
+            const cartesian = getMouseTerrainPosition(movement.position);
+            await setSourceFromCartesian(cartesian, true);
+        }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+    }
+
+    function getMouseTerrainPosition(screenPosition) {
+        const ray = viewer.camera.getPickRay(screenPosition);
+        if (!ray) return null;
+
+        return viewer.scene.globe.pick(ray, viewer.scene);
+    }
+
+    // ============================================================
+    // 13. 카메라
+    // ============================================================
+    let cameraMode = 0;
+
+    function setCameraA() {
+        viewer.camera.flyTo({
+            destination: Cesium.Cartesian3.fromDegrees(
+                centerLon - 0.014,
+                centerLat - 0.014,
+                3100
+            ),
+            orientation: {
+                heading: Cesium.Math.toRadians(38),
+                pitch: Cesium.Math.toRadians(-48),
+                roll: 0
+            },
+            duration: 1.2
+        });
+    }
+
+    function setCameraB() {
+        viewer.camera.flyTo({
+            destination: Cesium.Cartesian3.fromDegrees(
+                centerLon - 0.004,
+                centerLat - 0.004,
+                1300
+            ),
+            orientation: {
+                heading: Cesium.Math.toRadians(45),
+                pitch: Cesium.Math.toRadians(-36),
+                roll: 0
+            },
+            duration: 1.2
+        });
+    }
+
+
+    // ============================================================
+    // 14. UI
+    // ============================================================
+    spawnRateSlider.addEventListener("input", function () {
+        SPAWN_RATE = Number(spawnRateSlider.value);
+        spawnRateText.textContent = SPAWN_RATE;
+    });
+
+    maxParticleSlider.addEventListener("change", function () {
+        MAX_PARTICLES = Number(maxParticleSlider.value);
+        maxParticleText.textContent = MAX_PARTICLES;
+
+        if (hasSimulationStarted && terrainGrid.length) {
+            createParticlePool(MAX_PARTICLES);
+        }
+    });
+
+    speedSlider.addEventListener("input", function () {
+        SIMULATION_SPEED = Number(speedSlider.value);
+        speedText.textContent = SIMULATION_SPEED.toFixed(1);
+    });
+
+
+    window.addEventListener("keydown", function (e) {
+        if (e.code === "Space") {
+            toggleRelease();
+        }
+
+        if (e.key.toLowerCase() === "r") {
+            resetWater();
+        }
+
+    });
+
+    // ============================================================
+    // 15. 시작
+    // ============================================================
+    initCesium().catch(function (error) {
+        console.error(error);
+    });
+</script>
+</body>
+</html>
