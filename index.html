@@ -197,7 +197,7 @@
         });
 
         viewer.scene.globe.enableLighting = true;
-        viewer.scene.globe.depthTestAgainstTerrain = false;
+        viewer.scene.globe.depthTestAgainstTerrain = true;
         viewer.scene.requestRenderMode = false;
 
         waterCollection = viewer.scene.primitives.add(
@@ -471,7 +471,7 @@
                 outlineColor: Cesium.Color.WHITE.withAlpha(0.16),
                 outlineWidth: 0.6,
                 scaleByDistance: new Cesium.NearFarScalar(300, 1.35, 3500, 0.18),
-                disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                //disableDepthTestDistance: Number.POSITIVE_INFINITY,
                 show: false
             });
 
